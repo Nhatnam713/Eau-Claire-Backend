@@ -345,5 +345,102 @@ namespace OtpTests
             var ok = result as OkObjectResult;
             Assert.IsNotNull(ok);
         }
+
+        [TestMethod]
+        public void VerifyOtp_ReturnFail_WhenOtpNotInCache()
+        {
+            // Arrange
+            var cache = new MemoryCache(new MemoryCacheOptions());
+            var utilsMock = new Mock<IUtils>();
+            var service = new OtpService(cache, utilsMock.Object);
+
+            // Act
+            var result = service.VerifyOtp(
+                method: "email",
+                inputOtp: "123456",
+                userId: null,
+                deviceId: "device-x",
+                phone: null,
+                email: "noexist@gmail.com",
+                purpose: "login"
+            );
+
+            // Assert
+            Assert.IsFalse(result.IsSuccess);
+            Assert.AreEqual("500", result.ErrorCode);
+        }
+
+        [TestMethod]
+        public void VerifyOtp_ReturnFail_WhenMethodMismatch()
+        {
+            var cache = new MemoryCache(new MemoryCacheOptions());
+            var utilsMock = new Mock<IUtils>();
+            var service = new OtpService(cache, utilsMock.Object);
+
+            cache.Set("otp_device1_test@gmail.com", "654321");
+
+            var result = service.VerifyOtp(
+                method: "sms", // khác method
+                inputOtp: "654321",
+                userId: null,
+                deviceId: "device1",
+                phone: "0123",
+                email: null,
+                purpose: "login"
+            );
+
+            Assert.IsFalse(result.IsSuccess);
+        }
+
+        [TestMethod]
+        public async Task SendOtp_ShouldOverwriteExistingOtp()
+        {
+            var cache = new MemoryCache(new MemoryCacheOptions());
+            var utilsMock = new Mock<IUtils>();
+            utilsMock.Setup(u => u.GetEmailOtpTemplate(It.IsAny<string>()))
+                     .Returns("<html></html>");
+
+            var service = new OtpService(cache, utilsMock.Object);
+
+            string key = "otp_device1_test@gmail.com";
+            cache.Set(key, "111111");
+
+            await service.SendOtp("email", "device1", null, "test@gmail.com");
+
+            var newOtp = cache.Get<string>(key);
+
+            Assert.IsNotNull(newOtp);
+            Assert.AreNotEqual("111111", newOtp);
+        }
+
+        [TestMethod]
+        public void VerifyOtp_ShouldStoreCorrectTempTokenData()
+        {
+            var cache = new MemoryCache(new MemoryCacheOptions());
+            var utilsMock = new Mock<IUtils>();
+            var service = new OtpService(cache, utilsMock.Object);
+
+            cache.Set("otp_device1_test@gmail.com", "123456");
+
+            var result = service.VerifyOtp(
+                "email",
+                "123456",
+                99,
+                "device1",
+                null,
+                "test@gmail.com",
+                "reset-password"
+            );
+
+            var token = result.Data!.ToString();
+            var tokenData = cache.Get<TempTokenData>(token);
+
+            Assert.IsNotNull(tokenData);
+            Assert.AreEqual(99, tokenData.UserId);
+            Assert.AreEqual("email", tokenData.Method);
+            Assert.AreEqual("reset-password", tokenData.Purpose);
+            Assert.IsFalse(tokenData.isVerified);
+        }
+
     }
 }

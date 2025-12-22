@@ -21,7 +21,6 @@ namespace SystemTests
         private Mock<IUserProfileService> _profileService = null!;
         private Mock<IDeviceService> _deviceService = null!;
         private Mock<IRefreshTokenService> _refreshTokenService = null!;
-        private SystemController _controller = null!;
         private IMemoryCache _cache = null!;
 
         [TestInitialize]
@@ -85,6 +84,73 @@ namespace SystemTests
             Assert.IsNotNull(result.accessToken);
             Assert.IsNotNull(result.refreshToken);
         }
+
+        [TestMethod]
+        public void GetNewAccessToken_Return401_WhenRefreshTokenInvalid()
+        {
+            var cache = new MemoryCache(new MemoryCacheOptions());
+
+            var userRepo = new Mock<IUserRepository>();
+            var profileSvc = new Mock<IUserProfileService>();
+            var deviceSvc = new Mock<IDeviceService>();
+            var refreshSvc = new Mock<IRefreshTokenService>();
+
+            refreshSvc
+                .Setup(r => r.isValidRefreshToken(1, "bad-token"))
+                .Returns(false);
+
+            var service = new UserService(
+                cache,
+                userRepo.Object,
+                profileSvc.Object,
+                deviceSvc.Object,
+                refreshSvc.Object
+            );
+
+            var result = service.GetNewAccessTokenIfRefreshTokenValid(1, "bad-token", "login");
+
+            Assert.AreEqual("401", result.status);
+            Assert.IsFalse(result.isDeviceVerified);
+        }
+
+        [TestMethod]
+        public void Login_Return500_WhenJwtKeyMissing()
+        {
+            Environment.SetEnvironmentVariable("Jwt__Key", null);
+
+            var cache = new MemoryCache(new MemoryCacheOptions());
+
+            var userRepo = new Mock<IUserRepository>();
+            var profileSvc = new Mock<IUserProfileService>();
+            var deviceSvc = new Mock<IDeviceService>();
+            var refreshSvc = new Mock<IRefreshTokenService>();
+
+            userRepo.Setup(r => r.Login("user", "pass"))
+                .Returns(new User { UserId = 1, Username = "user" });
+
+            profileSvc.Setup(p => p.GetUserProfile(1))
+                .Returns(new UserProfile());
+
+            deviceSvc.Setup(d => d.CheckDeviceIsVerified("dev1", 1))
+                .Returns(true);
+
+            var service = new UserService(
+                cache,
+                userRepo.Object,
+                profileSvc.Object,
+                deviceSvc.Object,
+                refreshSvc.Object
+            );
+
+            var result = service.Login("user", "pass", "dev1");
+
+            Assert.AreEqual("500", result!.status);
+            Assert.IsFalse(result.isDeviceVerified);
+        }
+
+
+
+        //API Controller Tests
 
         [TestMethod]
         public void Login_InvalidDevice_Return401()
@@ -373,7 +439,7 @@ namespace SystemTests
             };
 
             var userServiceMock = new Mock<IUserService>();
-            
+
             userServiceMock.Setup(s => s.Login(loginRequest.Username, loginRequest.Password, loginRequest.DeviceId))
                 .Returns(result);
 
@@ -393,7 +459,7 @@ namespace SystemTests
         }
 
         [TestMethod]
-        public void Login_SystemController_Cancel() 
+        public void Login_SystemController_Cancel()
         {
             var loginRequest = new FishFarm.BusinessObjects.LoginRequest
             {
@@ -693,6 +759,118 @@ namespace SystemTests
             var status = result as ObjectResult;
             Assert.IsNotNull(status);
             Assert.AreEqual(500, status.StatusCode);
+        }
+
+        [TestMethod]
+        public void Login_Return401_WhenCredentialInvalid()
+        {
+            var service = new UserService(
+                new MemoryCache(new MemoryCacheOptions()),
+                new Mock<IUserRepository>().Object,
+                new Mock<IUserProfileService>().Object,
+                new Mock<IDeviceService>().Object,
+                new Mock<IRefreshTokenService>().Object
+            );
+
+            var result = service.Login("wrong", "wrong", "device");
+
+            Assert.AreEqual("401", result!.status);
+        }
+
+        [TestMethod]
+        public void Login_Return401_WhenDeviceNotVerified()
+        {
+            var userRepo = new Mock<IUserRepository>();
+            var deviceSvc = new Mock<IDeviceService>();
+
+            userRepo.Setup(r => r.Login("u", "p"))
+                .Returns(new User { UserId = 10 });
+
+            deviceSvc.Setup(d => d.CheckDeviceIsVerified("dev", 10))
+                .Returns(false);
+
+            var service = new UserService(
+                new MemoryCache(new MemoryCacheOptions()),
+                userRepo.Object,
+                new Mock<IUserProfileService>().Object,
+                deviceSvc.Object,
+                new Mock<IRefreshTokenService>().Object
+            );
+
+            var result = service.Login("u", "p", "dev");
+
+            Assert.AreEqual("401", result!.status);
+            Assert.IsFalse(result.isDeviceVerified);
+        }
+
+        [TestMethod]
+        public void ValidateTempToken_Return401_WhenPurposeInvalid()
+        {
+            var cache = new MemoryCache(new MemoryCacheOptions());
+            cache.Set("token", new TempTokenData { Purpose = "hack" });
+
+            var service = new UserService(
+                cache,
+                new Mock<IUserRepository>().Object,
+                new Mock<IUserProfileService>().Object,
+                new Mock<IDeviceService>().Object,
+                new Mock<IRefreshTokenService>().Object
+            );
+
+            var result = service.ValidateTempToken("token");
+
+            Assert.AreEqual("401", result.status);
+        }
+
+        [TestMethod]
+        public void ValidateTempToken_Return401_WhenTokenMissing()
+        {
+            var service = new UserService(
+                new MemoryCache(new MemoryCacheOptions()),
+                new Mock<IUserRepository>().Object,
+                new Mock<IUserProfileService>().Object,
+                new Mock<IDeviceService>().Object,
+                new Mock<IRefreshTokenService>().Object
+            );
+
+            var result = service.ValidateTempToken("nope");
+
+            Assert.AreEqual("401", result.status);
+        }
+
+        [TestMethod]
+        public void ResetPassword_Return401_WhenTokenNotVerified()
+        {
+            var cache = new MemoryCache(new MemoryCacheOptions());
+            cache.Set("token1", new TempTokenData { isVerified = false });
+
+            var service = new UserService(
+                cache,
+                new Mock<IUserRepository>().Object,
+                new Mock<IUserProfileService>().Object,
+                new Mock<IDeviceService>().Object,
+                new Mock<IRefreshTokenService>().Object
+            );
+
+            var result = service.ResetPassword(1, "a", "a", "token1");
+
+            Assert.AreEqual("401", result.status);
+        }
+
+        [TestMethod]
+        public void ResetPassword_Return400_WhenPasswordMismatch()
+        {
+            var service = new UserService(
+                new MemoryCache(new MemoryCacheOptions()),
+                new Mock<IUserRepository>().Object,
+                new Mock<IUserProfileService>().Object,
+                new Mock<IDeviceService>().Object,
+                new Mock<IRefreshTokenService>().Object
+            );
+
+            var result = service.ResetPassword(1, "a", "b", "token");
+
+            Assert.AreEqual("400", result.status);
         }
 
         [TestMethod]
